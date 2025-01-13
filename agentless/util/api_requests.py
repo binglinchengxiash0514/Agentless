@@ -1,9 +1,12 @@
+import os
 import time
-from typing import Dict, Union
+from typing import Dict, Optional, Union
 
 import anthropic
 import openai
 import tiktoken
+from azure.identity import DefaultAzureCredential
+from openai import AzureOpenAI
 
 
 def num_tokens_from_messages(message, model="gpt-3.5-turbo-0301"):
@@ -129,6 +132,80 @@ def create_anthropic_config(
         config["tools"] = tools
 
     return config
+
+
+def request_azure_engine(config, logger, max_retries=40, timeout=100):
+    """Send a request to Azure OpenAI's chat completions API.
+    
+    Args:
+        config: Configuration dictionary for the request
+        logger: Logger instance for tracking API interactions
+        max_retries: Maximum number of retry attempts (default: 40)
+        timeout: Timeout in seconds (default: 100)
+    
+    Returns:
+        API response object or None if request fails
+    """
+    ret = None
+    retries = 0
+    
+    # Get Azure OpenAI configuration from environment
+    azure_endpoint = os.getenv("AZURE_OPENAI_ENDPOINT")
+    if not azure_endpoint:
+        raise ValueError("AZURE_OPENAI_ENDPOINT environment variable is required")
+    
+    try:
+        # Use Azure AD credentials if available, fallback to API key
+        if os.getenv("AZURE_TENANT_ID") and os.getenv("AZURE_CLIENT_ID"):
+            credential = DefaultAzureCredential()
+            client = AzureOpenAI(
+                azure_endpoint=azure_endpoint,
+                api_version="2024-02-15-preview",
+                azure_ad_token_provider=credential,
+            )
+        else:
+            api_key = os.getenv("AZURE_OPENAI_KEY")
+            if not api_key:
+                raise ValueError("AZURE_OPENAI_KEY environment variable is required when not using Azure AD")
+            client = AzureOpenAI(
+                azure_endpoint=azure_endpoint,
+                api_key=api_key,
+                api_version="2024-02-15-preview",
+            )
+        
+        while ret is None and retries < max_retries:
+            try:
+                logger.info("Creating Azure API request")
+                ret = client.chat.completions.create(**config)
+                
+            except openai.RateLimitError:
+                print("Azure rate limit exceeded. Waiting...")
+                logger.info("Azure rate limit exceeded. Waiting...")
+                time.sleep(5)
+            except openai.APIConnectionError:
+                print("Azure API connection error. Waiting...")
+                logger.info("Azure API connection error. Waiting...")
+                time.sleep(5)
+            except openai.BadRequestError as e:
+                logger.info("Azure request invalid")
+                print(e)
+                logger.info(e)
+                raise Exception("Invalid Azure API Request")
+            except Exception as e:
+                print("Unknown error. Waiting...")
+                logger.info("Unknown error. Waiting...")
+                print(e)
+                logger.info(e)
+                time.sleep(1)
+            
+            retries += 1
+            
+        logger.info(f"Azure API response {ret}")
+        return ret
+        
+    except Exception as e:
+        logger.error(f"Azure authentication error: {e}")
+        raise
 
 
 def request_anthropic_engine(

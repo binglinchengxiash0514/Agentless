@@ -6,6 +6,7 @@ from agentless.util.api_requests import (
     create_anthropic_config,
     create_chatgpt_config,
     request_anthropic_engine,
+    request_azure_engine,
     request_chatgpt_engine,
 )
 
@@ -416,5 +417,103 @@ def make_model(
             max_new_tokens=max_tokens,
             temperature=temperature,
         )
+    elif backend == "azure":
+        return AzureChatDecoder(
+            name=model,
+            logger=logger,
+            batch_size=batch_size,
+            max_new_tokens=max_tokens,
+            temperature=temperature,
+        )
     else:
         raise NotImplementedError
+
+
+class AzureChatDecoder(DecoderBase):
+    """Azure OpenAI Chat Decoder implementation.
+    
+    This decoder supports Azure OpenAI's chat completions API with Azure AD authentication.
+    It maintains compatibility with the existing decoder interface while adding Azure-specific
+    configuration options.
+    """
+    
+    def __init__(self, name: str, logger, **kwargs) -> None:
+        """Initialize the Azure Chat Decoder.
+        
+        Args:
+            name: The deployment name of the Azure OpenAI model
+            logger: Logger instance for tracking API interactions
+            **kwargs: Additional arguments passed to DecoderBase
+        """
+        super().__init__(name, logger, **kwargs)
+        # Azure-specific configuration will be handled in api_requests.py
+        # This keeps the decoder focused on maintaining the interface contract
+        
+    def codegen(
+        self, message: str, num_samples: int = 1, prompt_cache: bool = False
+    ) -> List[dict]:
+        """Generate completions using Azure OpenAI's chat API.
+        
+        Args:
+            message: The input message/prompt
+            num_samples: Number of completions to generate (default: 1)
+            prompt_cache: Whether to use prompt caching (not supported in Azure)
+        
+        Returns:
+            List of dictionaries containing responses and token usage information
+        """
+        if self.temperature == 0:
+            assert num_samples == 1
+        batch_size = min(self.batch_size, num_samples)
+        
+        # Create Azure-specific configuration
+        config = create_chatgpt_config(
+            message=message,
+            max_tokens=self.max_new_tokens,
+            temperature=self.temperature,
+            batch_size=batch_size,
+            model=self.name,  # This will be the Azure deployment name
+        )
+        
+        # Use Azure-specific request function (to be implemented in api_requests.py)
+        ret = request_azure_engine(config, self.logger)
+        
+        if ret:
+            responses = [choice.message.content for choice in ret.choices]
+            completion_tokens = ret.usage.completion_tokens
+            prompt_tokens = ret.usage.prompt_tokens
+        else:
+            responses = [""]
+            completion_tokens = 0
+            prompt_tokens = 0
+        
+        # Maintain the same response format as other decoders
+        trajs = [
+            {
+                "response": responses[0],
+                "usage": {
+                    "completion_tokens": completion_tokens,
+                    "prompt_tokens": prompt_tokens,
+                },
+            }
+        ]
+        
+        for response in responses[1:]:
+            trajs.append(
+                {
+                    "response": response,
+                    "usage": {
+                        "completion_tokens": 0,
+                        "prompt_tokens": 0,
+                    },
+                }
+            )
+        return trajs
+
+    def is_direct_completion(self) -> bool:
+        """Indicate whether this decoder provides direct completions.
+        
+        Returns:
+            False as this is a chat-based decoder
+        """
+        return False
