@@ -137,13 +137,24 @@ def localize_instance(
 
     # file level localization
     if args.file_level:
+        # Prepare Azure configuration if using Azure backend
+        azure_config = {}
+        if args.backend == "azure":
+            if args.azure_model_deployment:
+                azure_config["model"] = args.azure_model_deployment
+            if args.azure_tenant_id:
+                azure_config["azure_tenant_id"] = args.azure_tenant_id
+            if args.azure_client_id:
+                azure_config["azure_client_id"] = args.azure_client_id
+
         fl = LLMFL(
             instance_id,
             structure,
             problem_statement,
-            args.model,
+            args.azure_model_deployment if args.backend == "azure" else args.model,
             args.backend,
             logger,
+            **azure_config,
         )
         found_files, additional_artifact_loc_file, file_traj = fl.localize(
             mock=args.mock
@@ -560,6 +571,16 @@ def main():
         help="Number of threads to use for creating API requests",
     )
     parser.add_argument("--target_id", type=str)
+    # Azure OpenAI configuration
+    parser.add_argument(
+        "--azure-tenant-id", type=str, help="Azure tenant ID for AD authentication"
+    )
+    parser.add_argument(
+        "--azure-client-id", type=str, help="Azure client ID for AD authentication"
+    )
+    parser.add_argument(
+        "--azure-model-deployment", type=str, help="Azure OpenAI model deployment name"
+    )
     parser.add_argument(
         "--skip_existing",
         action="store_true",
@@ -583,7 +604,7 @@ def main():
         "--backend",
         type=str,
         default="openai",
-        choices=["openai", "deepseek", "anthropic"],
+        choices=["openai", "deepseek", "anthropic", "azure"],
     )
     parser.add_argument(
         "--dataset",

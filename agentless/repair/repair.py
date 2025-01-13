@@ -401,13 +401,24 @@ def process_loc(loc, args, swe_bench_data, prev_o, write_lock=None):
     all_generations, counts, traj, prev_contents, file_names = [], [], [], [], []
     sample_responses = []
     # get greedy sample
+    # Prepare Azure configuration if using Azure backend
+    azure_config = {}
+    if args.backend == "azure":
+        if args.azure_model_deployment:
+            azure_config["model"] = args.azure_model_deployment
+        if args.azure_tenant_id:
+            azure_config["azure_tenant_id"] = args.azure_tenant_id
+        if args.azure_client_id:
+            azure_config["azure_client_id"] = args.azure_client_id
+
     model = make_model(
-        model=args.model,
+        model=args.azure_model_deployment if args.backend == "azure" else args.model,
         logger=logger,
         backend=args.backend,
         max_tokens=1024,
         temperature=0,
         batch_size=1,
+        **azure_config,
     )
     if args.skip_greedy:
         greedy_traj = {
@@ -437,13 +448,24 @@ def process_loc(loc, args, swe_bench_data, prev_o, write_lock=None):
 
     sample_responses.append(greedy_traj)
     # get temperature samples
+    # Prepare Azure configuration if using Azure backend
+    azure_config = {}
+    if args.backend == "azure":
+        if args.azure_model_deployment:
+            azure_config["model"] = args.azure_model_deployment
+        if args.azure_tenant_id:
+            azure_config["azure_tenant_id"] = args.azure_tenant_id
+        if args.azure_client_id:
+            azure_config["azure_client_id"] = args.azure_client_id
+
     model = make_model(
-        model=args.model,
+        model=args.azure_model_deployment if args.backend == "azure" else args.model,
         logger=logger,
         backend=args.backend,
         max_tokens=1024,
         temperature=0.8,
         batch_size=args.max_samples - 1,  # minus the 1 greedy sample
+        **azure_config,
     )
 
     if args.mock:
@@ -758,7 +780,7 @@ def main():
         "--backend",
         type=str,
         default="openai",
-        choices=["openai", "deepseek", "anthropic"],
+        choices=["openai", "deepseek", "anthropic", "azure"],
     )
     parser.add_argument("--output_folder", type=str, required=True)
     parser.add_argument("--post_process", action="store_true")
@@ -776,6 +798,16 @@ def main():
         help="Number of threads to use for creating API requests",
     )
     parser.add_argument("--target_id", type=str)
+    # Azure OpenAI configuration
+    parser.add_argument(
+        "--azure-tenant-id", type=str, help="Azure tenant ID for AD authentication"
+    )
+    parser.add_argument(
+        "--azure-client-id", type=str, help="Azure client ID for AD authentication"
+    )
+    parser.add_argument(
+        "--azure-model-deployment", type=str, help="Azure OpenAI model deployment name"
+    )
     parser.add_argument(
         "--mock", action="store_true", help="Mock run to compute prompt tokens."
     )

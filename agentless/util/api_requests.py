@@ -134,29 +134,47 @@ def create_anthropic_config(
     return config
 
 
-def request_azure_engine(config, logger, max_retries=40, timeout=100):
+def request_azure_engine(
+    config,
+    logger,
+    azure_endpoint: Optional[str] = None,
+    azure_tenant_id: Optional[str] = None,
+    azure_client_id: Optional[str] = None,
+    azure_api_key: Optional[str] = None,
+    max_retries: int = 40,
+    timeout: int = 100,
+) -> Optional[Dict]:
     """Send a request to Azure OpenAI's chat completions API.
-    
+
     Args:
         config: Configuration dictionary for the request
         logger: Logger instance for tracking API interactions
+        azure_endpoint: Azure OpenAI endpoint URL (optional, defaults to AZURE_OPENAI_ENDPOINT env var)
+        azure_tenant_id: Azure tenant ID for AD auth (optional, defaults to AZURE_TENANT_ID env var)
+        azure_client_id: Azure client ID for AD auth (optional, defaults to AZURE_CLIENT_ID env var)
+        azure_api_key: Azure API key (optional, defaults to AZURE_OPENAI_KEY env var)
         max_retries: Maximum number of retry attempts (default: 40)
         timeout: Timeout in seconds (default: 100)
-    
+
     Returns:
         API response object or None if request fails
     """
     ret = None
     retries = 0
-    
-    # Get Azure OpenAI configuration from environment
-    azure_endpoint = os.getenv("AZURE_OPENAI_ENDPOINT")
+
+    # Get Azure OpenAI configuration from parameters or environment
+    azure_endpoint = azure_endpoint or os.getenv("AZURE_OPENAI_ENDPOINT")
     if not azure_endpoint:
-        raise ValueError("AZURE_OPENAI_ENDPOINT environment variable is required")
-    
+        raise ValueError(
+            "Azure endpoint must be provided via parameter or AZURE_OPENAI_ENDPOINT environment variable"
+        )
+
     try:
         # Use Azure AD credentials if available, fallback to API key
-        if os.getenv("AZURE_TENANT_ID") and os.getenv("AZURE_CLIENT_ID"):
+        azure_tenant_id = azure_tenant_id or os.getenv("AZURE_TENANT_ID")
+        azure_client_id = azure_client_id or os.getenv("AZURE_CLIENT_ID")
+
+        if azure_tenant_id and azure_client_id:
             credential = DefaultAzureCredential()
             client = AzureOpenAI(
                 azure_endpoint=azure_endpoint,
@@ -164,45 +182,57 @@ def request_azure_engine(config, logger, max_retries=40, timeout=100):
                 azure_ad_token_provider=credential,
             )
         else:
-            api_key = os.getenv("AZURE_OPENAI_KEY")
+            api_key = azure_api_key or os.getenv("AZURE_OPENAI_KEY")
             if not api_key:
-                raise ValueError("AZURE_OPENAI_KEY environment variable is required when not using Azure AD")
+                raise ValueError(
+                    "Azure API key must be provided via parameter or AZURE_OPENAI_KEY environment variable when not using Azure AD"
+                )
             client = AzureOpenAI(
                 azure_endpoint=azure_endpoint,
                 api_key=api_key,
                 api_version="2024-02-15-preview",
             )
-        
+
         while ret is None and retries < max_retries:
             try:
                 logger.info("Creating Azure API request")
                 ret = client.chat.completions.create(**config)
-                
-            except openai.RateLimitError:
-                print("Azure rate limit exceeded. Waiting...")
-                logger.info("Azure rate limit exceeded. Waiting...")
-                time.sleep(5)
-            except openai.APIConnectionError:
-                print("Azure API connection error. Waiting...")
-                logger.info("Azure API connection error. Waiting...")
-                time.sleep(5)
-            except openai.BadRequestError as e:
-                logger.info("Azure request invalid")
-                print(e)
-                logger.info(e)
-                raise Exception("Invalid Azure API Request")
-            except Exception as e:
-                print("Unknown error. Waiting...")
-                logger.info("Unknown error. Waiting...")
-                print(e)
-                logger.info(e)
-                time.sleep(1)
-            
+
+            except openai.OpenAIError as e:
+                if isinstance(e, openai.BadRequestError):
+                    logger.info("Azure request invalid")
+                    print(e)
+                    logger.info(e)
+                    raise Exception("Invalid Azure API Request")
+                elif isinstance(e, openai.RateLimitError):
+                    print("Azure rate limit exceeded. Waiting...")
+                    logger.info("Azure rate limit exceeded. Waiting...")
+                    print(e)
+                    logger.info(e)
+                    time.sleep(5)
+                elif isinstance(e, openai.APIConnectionError):
+                    print("Azure API connection error. Waiting...")
+                    logger.info("Azure API connection error. Waiting...")
+                    print(e)
+                    logger.info(e)
+                    time.sleep(5)
+                elif isinstance(e, openai.AuthenticationError):
+                    logger.error("Azure authentication failed")
+                    print(e)
+                    logger.error(e)
+                    raise Exception("Azure Authentication Failed")
+                else:
+                    print("Unknown error. Waiting...")
+                    logger.info("Unknown error. Waiting...")
+                    print(e)
+                    logger.info(e)
+                    time.sleep(1)
+
             retries += 1
-            
+
         logger.info(f"Azure API response {ret}")
         return ret
-        
+
     except Exception as e:
         logger.error(f"Azure authentication error: {e}")
         raise

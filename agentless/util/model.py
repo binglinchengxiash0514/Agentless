@@ -1,6 +1,6 @@
 import json
 from abc import ABC, abstractmethod
-from typing import List
+from typing import List, Optional
 
 from agentless.util.api_requests import (
     create_anthropic_config,
@@ -392,7 +392,8 @@ def make_model(
     batch_size: int = 1,
     max_tokens: int = 1024,
     temperature: float = 0.0,
-):
+    **kwargs,
+) -> DecoderBase:
     if backend == "openai":
         return OpenAIChatDecoder(
             name=model,
@@ -424,6 +425,10 @@ def make_model(
             batch_size=batch_size,
             max_new_tokens=max_tokens,
             temperature=temperature,
+            azure_endpoint=kwargs.get("azure_endpoint"),
+            azure_tenant_id=kwargs.get("azure_tenant_id"),
+            azure_client_id=kwargs.get("azure_client_id"),
+            azure_api_key=kwargs.get("azure_api_key"),
         )
     else:
         raise NotImplementedError
@@ -431,41 +436,56 @@ def make_model(
 
 class AzureChatDecoder(DecoderBase):
     """Azure OpenAI Chat Decoder implementation.
-    
+
     This decoder supports Azure OpenAI's chat completions API with Azure AD authentication.
     It maintains compatibility with the existing decoder interface while adding Azure-specific
     configuration options.
     """
-    
-    def __init__(self, name: str, logger, **kwargs) -> None:
+
+    def __init__(
+        self,
+        name: str,
+        logger,
+        azure_endpoint: Optional[str] = None,
+        azure_tenant_id: Optional[str] = None,
+        azure_client_id: Optional[str] = None,
+        azure_api_key: Optional[str] = None,
+        **kwargs,
+    ) -> None:
         """Initialize the Azure Chat Decoder.
-        
+
         Args:
             name: The deployment name of the Azure OpenAI model
             logger: Logger instance for tracking API interactions
+            azure_endpoint: Azure OpenAI endpoint URL (optional, defaults to AZURE_OPENAI_ENDPOINT env var)
+            azure_tenant_id: Azure tenant ID for AD auth (optional, defaults to AZURE_TENANT_ID env var)
+            azure_client_id: Azure client ID for AD auth (optional, defaults to AZURE_CLIENT_ID env var)
+            azure_api_key: Azure API key (optional, defaults to AZURE_OPENAI_KEY env var)
             **kwargs: Additional arguments passed to DecoderBase
         """
         super().__init__(name, logger, **kwargs)
-        # Azure-specific configuration will be handled in api_requests.py
-        # This keeps the decoder focused on maintaining the interface contract
-        
+        self.azure_endpoint = azure_endpoint
+        self.azure_tenant_id = azure_tenant_id
+        self.azure_client_id = azure_client_id
+        self.azure_api_key = azure_api_key
+
     def codegen(
         self, message: str, num_samples: int = 1, prompt_cache: bool = False
     ) -> List[dict]:
         """Generate completions using Azure OpenAI's chat API.
-        
+
         Args:
             message: The input message/prompt
             num_samples: Number of completions to generate (default: 1)
             prompt_cache: Whether to use prompt caching (not supported in Azure)
-        
+
         Returns:
             List of dictionaries containing responses and token usage information
         """
         if self.temperature == 0:
             assert num_samples == 1
         batch_size = min(self.batch_size, num_samples)
-        
+
         # Create Azure-specific configuration
         config = create_chatgpt_config(
             message=message,
@@ -474,10 +494,17 @@ class AzureChatDecoder(DecoderBase):
             batch_size=batch_size,
             model=self.name,  # This will be the Azure deployment name
         )
-        
-        # Use Azure-specific request function (to be implemented in api_requests.py)
-        ret = request_azure_engine(config, self.logger)
-        
+
+        # Use Azure-specific request function with configuration parameters
+        ret = request_azure_engine(
+            config,
+            self.logger,
+            azure_endpoint=self.azure_endpoint,
+            azure_tenant_id=self.azure_tenant_id,
+            azure_client_id=self.azure_client_id,
+            azure_api_key=self.azure_api_key,
+        )
+
         if ret:
             responses = [choice.message.content for choice in ret.choices]
             completion_tokens = ret.usage.completion_tokens
@@ -486,7 +513,7 @@ class AzureChatDecoder(DecoderBase):
             responses = [""]
             completion_tokens = 0
             prompt_tokens = 0
-        
+
         # Maintain the same response format as other decoders
         trajs = [
             {
@@ -497,7 +524,7 @@ class AzureChatDecoder(DecoderBase):
                 },
             }
         ]
-        
+
         for response in responses[1:]:
             trajs.append(
                 {
@@ -512,7 +539,7 @@ class AzureChatDecoder(DecoderBase):
 
     def is_direct_completion(self) -> bool:
         """Indicate whether this decoder provides direct completions.
-        
+
         Returns:
             False as this is a chat-based decoder
         """
